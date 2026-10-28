@@ -1,0 +1,150 @@
+import Foundation
+
+/// Decides which live activities to create, update and dismiss as Shotbolt's state changes. No I/O: it returns the commands,
+/// and the plugin sends them.
+///
+/// - A take shows from its countdown until it is saved, then turns green ("Recording saved", Copy) for a few seconds.
+/// - With "Show New Screenshots", each new capture shows for a few seconds, unless a take is on screen.
+/// - The captures that were there when the plugin started are never announced.
+public struct ActivityPlanner {
+    public static let savedDuration: TimeInterval = 6
+    public static let captureDuration: TimeInterval = 5
+    /// A take saved longer ago than this is not announced (the plugin started late, or Shotbolt took long).
+    public static let savedWindow: TimeInterval = 120
+    /// How long "Saving recording" waits for the file to reach History after the take ended.
+    public static let saveWait: TimeInterval = 10
+
+    /// What makes the recording activity change: anything else (the running clock) DynamicLake animates by itself.
+    struct RecordingKey: Equatable {
+        var state: ShotboltStatus.Recording.State
+        var kind: ShotboltStatus.Recording.Kind
+        /// Whole seconds, so a feed rewritten a moment later with the same take does not resend it.
+        var start: Int
+        var countdownEnd: Int?
+    }
+
+    private var known: Set<UUID>?
+    private var recordingKey: RecordingKey?
+    /// The recording activity exists (recording, or showing "saved").
+    private var recordingShown = false
+    private var savedUntil: Date?
+    /// The capture "saved" shows, so its Copy can say "Copied".
+    private var savedCapture: ShotboltStatus.Capture?
+    /// When the take on screen started: an older `lastTake` in the feed is the previous take's.
+    private var takeStartedAt: Date?
+    /// The take ended while saving; its file is not in the feed yet.
+    private var awaitingSaveUntil: Date?
+    private var captureShown = false
+    private var captureUntil: Date?
+
+    public init() {}
+
+    /// The commands for a new state. `assetID` registers a capture's thumbnail when one is needed.
+    public mutating func update(_ state: ShotboltState, settings: PluginSettings, features: HostFeatures, now: Date,
+                                assetID: (ShotboltStatus.Capture) -> String?) -> [JSON] {
+        guard let status = state.status else { return dismissAll() }
+        var out: [JSON] = []
+        let fresh = status.captures.filter { known?.contains($0.id) == false }
+        let firstLook = known == nil
+        known = (known ?? []).union(status.captures.map(\.id))
+
+        if let recording = status.recording, settings.showRecordings, recording.state != .other {
+            let start = Int(status.recordingStart()?.timeIntervalSince1970.rounded() ?? 0)
+            let key = RecordingKey(state: recording.state, kind: recording.kind,
+                                   start: recording.state == .paused ? Int(recording.elapsed) : start,
+                                   countdownEnd: recording.countdownEndsAt.map { Int($0.timeIntervalSince1970.rounded()) })
+            if recordingKey == nil { takeStartedAt = status.recordingStart() ?? now }
+            if key != recordingKey || savedUntil != nil,
+               let command = Surfaces.recordingActivity(status, now: now, create: !recordingShown, features: features) {
+                out.append(command)
+                recordingShown = true
+            }
+            recordingKey = key
+            savedUntil = nil
+            awaitingSaveUntil = nil
+            if captureShown { out.append(dismissCapture()) }
+            return out
+        }
+
+        if let ended = recordingKey ?? (awaitingSaveUntil != nil ? RecordingKey(state: .saving, kind: .other, start: 0) : nil) {
+            // The take ended: saved, still on its way to History, or discarded. Shotbolt says which (`lastTake`); an older
+            // Shotbolt does not, and then a new video or GIF is the saved take and "saving" means a file is coming.
+            recordingKey = nil
+            let take = status.lastTake.flatMap { take in
+                take.endedAt >= (takeStartedAt ?? .distantPast).addingTimeInterval(-1) && now.timeIntervalSince(take.endedAt) < Self.savedWindow ? take : nil
+            }
+            let saved: ShotboltStatus.Capture?
+            let fileComing: Bool
+            if let take {
+                saved = take.outcome == .saved ? take.capture.flatMap { id in status.captures.first { $0.id == id } } : nil
+                fileComing = take.outcome == .saved
+            } else {
+                saved = fresh.first { ($0.kind == .video || $0.kind == .gif) && now.timeIntervalSince($0.createdAt) < Self.savedWindow }
+                fileComing = ended.state == .saving || ended.state == .converting
+            }
+            if let saved, settings.showRecordings, recordingShown {
+                out.append(Surfaces.savedActivity(saved, assetID: assetID(saved), create: false, features: features))
+                savedUntil = now.addingTimeInterval(Self.savedDuration)
+                savedCapture = saved
+                awaitingSaveUntil = nil
+                return out
+            }
+            if fileComing, settings.showRecordings, recordingShown {
+                if awaitingSaveUntil == nil { awaitingSaveUntil = now.addingTimeInterval(Self.saveWait) }
+                return out
+            }
+            if recordingShown { out.append(dismissRecording()) }
+        } else if !settings.showRecordings, recordingShown {
+            out.append(dismissRecording())
+        }
+
+        if !firstLook, settings.showNewCaptures, savedUntil == nil, let newest = fresh.first(where: { $0.kind != .other }),
+           now.timeIntervalSince(newest.createdAt) < Self.savedWindow {
+            out.append(Surfaces.captureActivity(newest, assetID: assetID(newest), features: features))
+            captureShown = true
+            captureUntil = now.addingTimeInterval(Self.captureDuration)
+        }
+        return out
+    }
+
+    /// Copy ran for `id`: when "saved" shows that capture, it says so.
+    public mutating func copied(_ id: UUID, features: HostFeatures) -> [JSON] {
+        guard let capture = savedCapture, capture.id == id, savedUntil != nil else { return [] }
+        return [Surfaces.copiedUpdate(capture, features: features)]
+    }
+
+    /// When `tick` next ends something, if anything shows.
+    public var nextDeadline: Date? { [savedUntil ?? awaitingSaveUntil, captureUntil].compactMap { $0 }.min() }
+
+    /// Ends what has been on screen long enough.
+    public mutating func tick(now: Date) -> [JSON] {
+        var out: [JSON] = []
+        if let until = savedUntil ?? awaitingSaveUntil, now >= until { out.append(dismissRecording()) }
+        if let until = captureUntil, now >= until { out.append(dismissCapture()) }
+        return out
+    }
+
+    private mutating func dismissAll() -> [JSON] {
+        var out: [JSON] = []
+        if recordingShown { out.append(dismissRecording()) }
+        if captureShown { out.append(dismissCapture()) }
+        recordingKey = nil
+        awaitingSaveUntil = nil
+        return out
+    }
+
+    private mutating func dismissRecording() -> JSON {
+        recordingShown = false
+        savedUntil = nil
+        savedCapture = nil
+        takeStartedAt = nil
+        awaitingSaveUntil = nil
+        return Surfaces.dismiss(Surfaces.recordingActivityID)
+    }
+
+    private mutating func dismissCapture() -> JSON {
+        captureShown = false
+        captureUntil = nil
+        return Surfaces.dismiss(Surfaces.captureActivityID)
+    }
+}

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "identifier": "nl.breukr.shotbolt.dynamiclake",
+  "name": "Shotbolt",
+  "version": "1.0.0",
+  "developerName": "Breukr",
+  "description": "Shotbolt in the notch. The time, Pause and Stop while you record. Open the lake for your newest screenshots and recordings: copy them or their text, annotate, pin, or drag them into any app, and start any capture from there.",
+  "executable": "shotbolt-lake",
+  "arguments": [],
+  "icon": "icon.png",
+  "autoStart": true,
+  "lake": {
+    "size": "big",
+    "glance": {
+      "systemImage": "camera.viewfinder"
+    }
+  },
+  "settings": [
+    {
+      "id": "showRecordings",
+      "type": "switch",
+      "title": "Show Recordings",
+      "description": "A red dot and the time while Shotbolt records, with Pause and Stop.",
+      "systemImage": "record.circle",
+      "tint": "red",
+      "default": true
+    },
+    {
+      "id": "showNewCaptures",
+      "type": "switch",
+      "title": "Show New Screenshots",
+      "description": "Each new capture for a few seconds. Shotbolt's Quick Access shows them too.",
+      "systemImage": "camera.viewfinder",
+      "tint": "gray",
+      "default": false
+    },
+    {
+      "id": "website",
+      "type": "button",
+      "title": "About Shotbolt",
+      "buttonTitle": "Open",
+      "systemImage": "safari",
+      "url": "https://shotbolt.app"
+    }
+  ]
+}

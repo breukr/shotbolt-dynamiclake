@@ -1,0 +1,48 @@
+{
+  "app" : {
+    "build" : "15",
+    "pid" : 4242,
+    "version" : "1.3.0"
+  },
+  "captures" : [
+    {
+      "app" : "Safari",
+      "category" : "web",
+      "createdAt" : "2026-10-27T12:00:00.000Z",
+      "file" : "/Users/example/Pictures/Shotbolt/Pricing table.png",
+      "height" : 900,
+      "id" : "6F9619FF-8B86-4011-B42D-00C04FC964FF",
+      "kept" : true,
+      "kind" : "screenshot",
+      "saved" : true,
+      "thumbnail" : "/Users/example/Library/Application Support/Shotbolt/Thumbnails/6F9619FF-8B86-4011-B42D-00C04FC964FF.png",
+      "title" : "Pricing table",
+      "width" : 1440
+    },
+    {
+      "createdAt" : "2026-10-27T11:30:00.250Z",
+      "duration" : 42.5,
+      "file" : "/Users/example/Library/Application Support/Shotbolt/Captures/Shotbolt 2026-10-27 at 11.30.00.mp4",
+      "height" : 1080,
+      "id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0",
+      "kept" : false,
+      "kind" : "video",
+      "saved" : false,
+      "width" : 1920
+    }
+  ],
+  "enabled" : true,
+  "lastTake" : {
+    "capture" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0",
+    "endedAt" : "2026-10-27T11:30:00.250Z",
+    "outcome" : "saved"
+  },
+  "pro" : true,
+  "recording" : {
+    "elapsed" : 75.5,
+    "kind" : "video",
+    "state" : "recording"
+  },
+  "schemaVersion" : 1,
+  "updatedAt" : "2026-10-27T12:01:15.500Z"
+}
