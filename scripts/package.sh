@@ -53,5 +53,6 @@ rm -f "$zip"
 # No macOS metadata in the archive (no "._" files with extended attributes): only the three files of the package.
 (cd "$out" && ditto -c -k --norsrc --noextattr --noacl --keepParent "$name.dynamiclakeplugin" "$zip")
 (( $(stat -f %z "$zip") <= 7340032 )) || { print -u2 "the archive is over 7 MB"; exit 1 }
-shasum -a 256 "$zip" | tee "$zip.sha256"
+# The checksum file names the zip only, so `shasum -c` works wherever it is downloaded.
+(cd "$out" && shasum -a 256 "${zip:t}") | tee "$zip.sha256"
 print "package: $pkg"
