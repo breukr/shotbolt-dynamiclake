@@ -604,7 +604,7 @@ public enum Surfaces {
         case .pluginOutdated:
             Message(title: "Update this plugin", detail: "Shotbolt is newer than this plugin", action: nil, actionTitle: nil)
         case .disabled:
-            Message(title: "Shotbolt links are turned off", detail: "Turn them on in Shotbolt Settings, under Advanced",
+            Message(title: "Other apps can't control Shotbolt", detail: "Turn this on in Shotbolt Settings, under Advanced",
                     action: .openSettings, actionTitle: "Open Settings")
         case .ready:
             Message(title: "No captures yet", detail: "", action: nil, actionTitle: nil)

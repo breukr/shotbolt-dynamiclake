@@ -40,7 +40,8 @@ else
   codesign --force --sign "$identity" --options runtime --timestamp "$pkg/shotbolt-lake"
 fi
 codesign --verify --strict "$pkg/shotbolt-lake"
-lipo "$pkg/shotbolt-lake" -verify_arch arm64 x86_64
+# One architecture per check: Xcode 27's lipo reads a second name after -verify_arch as another input file.
+for arch in arm64 x86_64; do lipo "$pkg/shotbolt-lake" -verify_arch $arch; done
 
 # DynamicLake Market's limits: archive 7 MB, package 20 MB, manifest 128 KB, icon 1.5 MB.
 (( $(stat -f %z "$pkg/plugin.json") <= 131072 )) || { print -u2 "plugin.json is over 128 KB"; exit 1 }

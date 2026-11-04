@@ -9,7 +9,8 @@ public struct ShotboltStatus: Decodable, Equatable, Sendable {
     public static let supportedSchema = 1
 
     public var schemaVersion: Int
-    /// Shotbolt's "Allow shotbolt:// links and scripts". Off: no recording and no captures, and buttons would do nothing.
+    /// Shotbolt's "Let other apps control Shotbolt" (Settings, Advanced: shotbolt:// links and scripts). Off: no recording and
+    /// no captures, and buttons would do nothing.
     public var enabled: Bool
     public var app: App
     public var recording: Recording?
@@ -176,7 +177,7 @@ public enum ShotboltState: Equatable, Sendable {
     case needsUpdate
     /// The feed is newer than this plugin understands.
     case pluginOutdated
-    /// "Allow shotbolt:// links and scripts" is off.
+    /// "Let other apps control Shotbolt" is off.
     case disabled
     case ready(ShotboltStatus)
 

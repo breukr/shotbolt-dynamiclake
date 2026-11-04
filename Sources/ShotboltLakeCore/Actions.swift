@@ -22,7 +22,7 @@ public enum PluginAction: Equatable, Sendable {
     case launchShotbolt
     /// Shotbolt is not installed, or too old for the feed.
     case getShotbolt
-    /// "Allow shotbolt:// links and scripts" is off: Shotbolt's Settings, which open even then.
+    /// "Let other apps control Shotbolt" is off: Shotbolt's Settings, which open even then.
     case openSettings
 
     private static let simple: [String: PluginAction] = [

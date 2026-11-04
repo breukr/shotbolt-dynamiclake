@@ -49,7 +49,7 @@ if arguments.contains("--check") {
     case .notRunning: print("state: not running")
     case .needsUpdate: print("state: running, no feed (needs a Shotbolt with the status feed)")
     case .pluginOutdated: print("state: the feed is newer than this plugin")
-    case .disabled: print("state: links and scripts are off in Shotbolt")
+    case .disabled: print("state: \"Let other apps control Shotbolt\" is off (Shotbolt Settings, Advanced)")
     case .ready(let status):
         print("state: ready, Shotbolt \(status.app.version) (\(status.app.build)), \(status.captures.count) captures")
         if let recording = status.recording { print("recording: \(recording.state.rawValue) \(recording.kind.rawValue), \(Int(recording.elapsed)) s") }

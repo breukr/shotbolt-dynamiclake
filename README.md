@@ -20,14 +20,16 @@ to it, and it does nothing without Shotbolt installed.
 - **DynaGlance**: the take's compact row while one runs, then the newest captures with Copy.
 - **Show New Screenshots** (a setting, off by default): each new capture for a few seconds.
 
-When Shotbolt is not installed, not running, too old for the plugin, or has its links turned off, the lake says so with the one
-button that fixes it.
+When Shotbolt is not installed, not running, too old for the plugin, or does not let other apps control it, the lake says so
+with the one button that fixes it.
 
 ## Requirements
 
 - macOS 14 or later, with DynamicLake.
-- Shotbolt with its status feed for companion apps (a Shotbolt update after 1.2.3). An older Shotbolt shows a notice asking for
+- Shotbolt 1.2.4 or later, the first release with its status feed for companion apps. An older Shotbolt shows a notice asking for
   the update.
+- The direct download of Shotbolt from shotbolt.app (or Homebrew). Shotbolt Lite from the App Store does not write the status feed,
+  so the plugin does nothing with it.
 
 ## How it works
 
