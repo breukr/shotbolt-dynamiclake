@@ -44,15 +44,24 @@ if arguments.contains("--demo-json") {
 if arguments.contains("--check") {
     print("Shotbolt: \(target.bundleID)")
     print("feed: \(target.statusFile.path)")
-    switch link.currentState(now: Date()) {
+    // Shotbolt writes the feed only for a companion that asks, so ask as the plugin does and give it a moment: without this a
+    // Shotbolt with the feed reads as one without it whenever the plugin itself is not running.
+    link.subscribe()
+    var state = link.currentState(now: Date())
+    let deadline = Date().addingTimeInterval(3)
+    while state == .needsUpdate, Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.1)
+        state = link.currentState(now: Date())
+    }
+    switch state {
     case .notInstalled: print("state: not installed")
     case .notRunning: print("state: not running")
     case .needsUpdate: print("state: running, no feed (needs a Shotbolt with the status feed)")
     case .pluginOutdated: print("state: the feed is newer than this plugin")
-    case .disabled: print("state: \"Let other apps control Shotbolt\" is off (Shotbolt Settings, Advanced)")
+    case .disabled: print("state: \"\(Surfaces.controlSwitchName)\" is off (Shotbolt Settings: Workflows from 1.3, Advanced before)")
     case .ready(let status):
         print("state: ready, Shotbolt \(status.app.version) (\(status.app.build)), \(status.captures.count) captures")
-        if let recording = status.recording { print("recording: \(recording.state.rawValue) \(recording.kind.rawValue), \(Int(recording.elapsed)) s") }
+        if let recording = status.recording { print("recording: \(recording.state.rawValue) \(recording.kind.rawValue), \(Surfaces.wholeSeconds(recording.elapsed)) s") }
     }
     exit(0)
 }

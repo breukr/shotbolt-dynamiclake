@@ -25,6 +25,10 @@ public enum Surfaces {
         static let section = 8.0
         /// Between buttons in a row, the take row's parts, the band's picture and text, the text's lines, the filmstrip's tiles.
         static let row = 6.0, take = 8.0, bandGap = 12.0, textGap = 4.0, strip = 8.0
+        /// Between the toolbar's buttons: tighter than `row`, because Shotbolt's own symbols for Area and Fullscreen are wider
+        /// than generic ones and at 6 pt "Fullscreen" is cut off. Checked live at the big lake's base width (Playground 1.2,
+        /// 2026-11-10): 5 pt fits, 4 pt leaves a little room.
+        static let toolbar = 4.0
         /// The take's mark in the lake and in DynaGlance; a title and its Keep star; the notice's lines.
         static let takeMark = 20.0, glanceMark = 16.0, titleGap = 5.0, noticeGap = 3.0
     }
@@ -77,8 +81,8 @@ public enum Surfaces {
     public static func relativeTime(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
         let seconds = now.timeIntervalSince(date)
         if seconds < 60 { return "Just now" }
-        if seconds < 3600 { return "\(Int(seconds / 60)) min ago" }
-        if calendar.isDate(date, inSameDayAs: now) { return "\(Int(seconds / 3600)) hr ago" }
+        if seconds < 3600 { return "\(wholeSeconds(seconds / 60)) min ago" }
+        if calendar.isDate(date, inSameDayAs: now) { return "\(wholeSeconds(seconds / 3600)) hr ago" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
             return "Yesterday"
         }
@@ -97,9 +101,16 @@ public enum Surfaces {
         }.min()
     }
 
+    /// A whole number from any Double without trapping (Swift stops the program on a Double too big for an Int): not a number
+    /// is 0, and the result is held to 10^12 either way, about 32,000 years of seconds.
+    public static func wholeSeconds(_ value: Double, _ rule: FloatingPointRoundingRule = .towardZero) -> Int {
+        guard value.isFinite else { return 0 }
+        return Int(min(max(value.rounded(rule), -1e12), 1e12))
+    }
+
     /// "1:05" or "1:02:05".
     public static func duration(_ seconds: Double) -> String {
-        let total = max(0, Int(seconds.rounded()))
+        let total = max(0, wholeSeconds(seconds, .toNearestOrAwayFromZero))
         let (h, m, s) = (total / 3600, total / 60 % 60, total % 60)
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
@@ -163,6 +174,46 @@ public enum Surfaces {
         return timer
     }
 
+    /// What ends the compact clock's text: braille blanks (U+2800), which draw nothing but take room, since the slot takes no
+    /// padding and trims spaces. One is about 8 pt wide. On a notch the text otherwise sits flush against the activity's edge,
+    /// and two put it about as far in as the dot on the other side. On a display without a notch DynamicLake Playground 1.2
+    /// aligns text about 6 pt past the pill's edge, so two leave about 8 pt there, and "1:02:05" still fits.
+    static let clockEnd = String(repeating: "\u{2800}", count: 2)
+
+    /// The compact activity's clock while a take runs: "0:42" as numeric text, and when it next changes (`ActivityPlanner.tick`
+    /// sends that second). DynamicLake's timer reads 00:00:42, so the plugin draws its own, ended by `clockEnd`.
+    /// Red while the take records: on a display without a notch the dot is not drawn, so the colour is what says "recording"
+    /// there. Paused and during the countdown it stays white, so a frozen or counting-down time does not look like a running
+    /// take. Nil when there is nothing to count.
+    static func compactClock(_ status: ShotboltStatus, now: Date) -> (slot: JSON, next: Date?)? {
+        guard let recording = status.recording else { return nil }
+        let shown: Int
+        let next: Date?
+        switch recording.state {
+        case .recording:
+            let start = status.recordingStart() ?? now
+            shown = max(0, wholeSeconds(now.timeIntervalSince(start), .down))
+            next = start.addingTimeInterval(Double(shown + 1))
+        case .paused:
+            shown = max(0, wholeSeconds(recording.elapsed, .down))
+            next = nil
+        case .starting:
+            guard let end = recording.countdownEndsAt, end.timeIntervalSince(now) >= 1 else { return nil }
+            shown = wholeSeconds(end.timeIntervalSince(now), .up)
+            next = end.addingTimeInterval(-Double(shown - 1))
+        case .saving, .converting, .other:
+            return nil
+        }
+        let tint = recording.state == .recording ? "red" : "white"
+        return (text(duration(Double(shown)) + clockEnd, style: "numeric", tint: tint, id: "clock"), next)
+    }
+
+    /// The compact clock's next second. The left slot goes along: DynamicLake drops a slot an update leaves out.
+    public static func clockUpdate(_ slot: JSON, recording: ShotboltStatus.Recording) -> JSON {
+        ["schemaVersion": pluginSchemaVersion, "type": "update", "activityID": recordingActivityID,
+         "surfaces": ["compactLiveActivity": ["leftSlot": takeMark(recording, size: nil, id: nil), "rightSlot": slot]]]
+    }
+
     /// The countdown before a take, while there is one.
     static func countdown(_ recording: ShotboltStatus.Recording, now: Date, id: String? = nil) -> JSON? {
         guard let end = recording.countdownEndsAt, end.timeIntervalSince(now) >= 1 else { return nil }
@@ -209,12 +260,14 @@ public enum Surfaces {
     public static func recordingActivity(_ status: ShotboltStatus, now: Date, create: Bool, features: HostFeatures) -> JSON? {
         guard let recording = status.recording else { return nil }
         let gif = recording.kind == .gif
+        // Without numeric text the host gets its own timer, cramped as it is.
+        let clock = features.numericText ? compactClock(status, now: now)?.slot : nil
         let compact: JSON
         let peek: JSON
         switch recording.state {
         case .starting:
             let timer = countdown(recording, now: now)
-            compact = ["leftSlot": symbol("record.circle", tint: "red"), "rightSlot": timer ?? ["type": "progress"]]
+            compact = ["leftSlot": symbol("record.circle", tint: "red"), "rightSlot": clock ?? timer ?? ["type": "progress"]]
             var starting: JSON = [
                 "leftSlot": button(.stopRecording, symbol: "xmark", title: "Cancel", tint: "white", id: "cancel"),
                 "center": text(timer == nil ? (gif ? "GIF starts" : "Recording starts") : "Recording in", style: "compact"),
@@ -223,7 +276,7 @@ public enum Surfaces {
             peek = starting
         case .recording, .paused:
             let paused = recording.state == .paused
-            compact = ["leftSlot": takeMark(recording, size: nil, id: nil), "rightSlot": recordingTimer(status, now: now)]
+            compact = ["leftSlot": takeMark(recording, size: nil, id: nil), "rightSlot": clock ?? recordingTimer(status, now: now)]
             peek = [
                 "leftSlot": paused
                     ? button(.pauseRecording, symbol: "play.fill", title: "Resume", tint: "white", id: "pause")
@@ -246,12 +299,12 @@ public enum Surfaces {
                                surfaces: surfaces, presentSneakPeek: nil, features: features)
     }
 
-    /// What opens a saved take: the video editor, or the GIF.
+    /// What opens a capture: the editor for a screenshot, the video editor, or the GIF. Names and symbols are History's own.
     static func openAction(_ capture: ShotboltStatus.Capture) -> (symbol: String, title: String) {
         switch capture.kind {
         case .video: ("slider.horizontal.below.rectangle", "Edit Video")
-        case .gif: ("arrow.up.forward.app", "Open")
-        case .screenshot, .other: ("pencil.tip.crop.circle", "Annotate")
+        case .gif: ("arrow.up.right.square", "Open")
+        case .screenshot, .other: ("pencil.and.scribble", "Annotate")
         }
     }
 
@@ -376,17 +429,18 @@ public enum Surfaces {
         func tool(_ action: PluginAction, _ symbol: String, _ title: String) -> JSON {
             capsule(action, symbol: symbol, title: title, id: "tool-\(action.actionID)")
         }
-        // Short nouns: four 26 pt capsules and the two symbols must fit the lake's width.
+        // Short nouns: four 26 pt capsules and the two symbols must fit the lake's width. The symbols are Shotbolt's own for
+        // these commands (its menu bar menu and shortcuts), so the lake reads like Shotbolt.
         let tools = moreOpen
             ? [tool(.captureText, "text.viewfinder", "Text"), tool(.scrollingCapture, "arrow.up.and.down.text.horizontal", "Scrolling"),
-               tool(.recordGIF, "photo.stack", "GIF"), tool(.selfTimer, "timer", "Self-Timer")]
-            : [tool(.captureArea, "viewfinder", "Area"), tool(.captureWindow, "macwindow", "Window"),
-               tool(.captureFullscreen, "display", "Fullscreen"), tool(.recordScreen, "record.circle", "Record")]
-        return ["type": "hstack", "id": "toolbar", "spacing": Metrics.row, "children": tools + [
+               tool(.recordGIF, "photo.stack", "GIF"), tool(.selfTimer, "timer.square", "Self-Timer")]
+            : [tool(.captureArea, "rectangle.dashed", "Area"), tool(.captureWindow, "macwindow", "Window"),
+               tool(.captureFullscreen, "rectangle.expand.diagonal", "Fullscreen"), tool(.recordScreen, "record.circle", "Record")]
+        return ["type": "hstack", "id": "toolbar", "spacing": Metrics.toolbar, "children": tools + [
             ["type": "spacer"],
             button(.toggleMore, symbol: moreOpen ? "ellipsis.circle.fill" : "ellipsis.circle", title: moreOpen ? "Main Tools" : "More Tools",
                    tint: moreOpen ? "white" : "gray", shape: "plain", size: Metrics.toolbarSymbol, id: "tool-more"),
-            button(.openHistory, symbol: "clock.arrow.circlepath", title: "Open History", tint: "gray", shape: "plain",
+            button(.openHistory, symbol: "square.grid.2x2", title: "Open History", tint: "gray", shape: "plain",
                    size: Metrics.toolbarSymbol, id: "tool-open-history"),
         ]]
     }
@@ -469,7 +523,8 @@ public enum Surfaces {
         return mark
     }
 
-    /// The capture's right-click menu, in History's order. Pro-only items show only with Pro: the notch never sells.
+    /// The capture's right-click menu, in History's order and with its names and symbols. Pro-only items show only with Pro:
+    /// the notch never sells. Copy Text and AI-safe Copy only on screenshots: Shotbolt refuses them on a video or GIF.
     static func contextMenu(_ capture: ShotboltStatus.Capture, pro: Bool) -> [JSON] {
         func item(_ title: String, _ symbol: String, _ action: PluginAction) -> JSON {
             ["title": title, "systemImage": symbol, "actionID": action.actionID]
@@ -479,11 +534,11 @@ public enum Surfaces {
         var menu = [item(open.title, open.symbol, .open(id)), item("Copy", "doc.on.doc", .copy(id))]
         if capture.kind == .screenshot || capture.kind == .other {
             menu.append(item("Copy Text", "text.viewfinder", .copyText(id)))
-            if pro { menu.append(item("AI-safe Copy", "eye.slash", .aiCopy(id))) }
+            if pro { menu.append(item("AI-safe Copy", "wand.and.sparkles", .aiCopy(id))) }
             menu.append(item("Pin to Screen", "pin", .pin(id)))
         }
         menu.append(capture.kept ? item("Stop Keeping", "star.slash", .keep(id, false)) : item("Keep", "star", .keep(id, true)))
-        menu.append(item("Reveal in Finder", "folder", .reveal(id)))
+        menu.append(item("Show in Finder", "folder", .reveal(id)))
         return menu
     }
 
@@ -511,7 +566,7 @@ public enum Surfaces {
             actions.append(capsule(.copyText(id), symbol: "text.viewfinder", title: "Copy Text", id: "band-third"))
         case .video, .gif:
             actions.append(capsule(.open(id), symbol: open.symbol, title: open.title, id: "band-open"))
-            actions.append(capsule(.reveal(id), symbol: "folder", title: "Reveal", id: "band-third"))
+            actions.append(capsule(.reveal(id), symbol: "folder", title: "Show in Finder", id: "band-third"))
         }
         var band: JSON = [
             "type": "hstack", "id": "band", "spacing": Metrics.bandGap, "padding": ["top": Metrics.section],
@@ -590,6 +645,10 @@ public enum Surfaces {
         public var actionTitle: String?
     }
 
+    /// Shotbolt's switch for `shotbolt://` links and scripts, by the name its Settings show.
+    public static let controlSwitchName = "Let other apps control Shotbolt"
+    static let disabledDetail = "Turn on \u{201C}\(controlSwitchName)\u{201D} in Settings"
+
     public static func message(for state: ShotboltState) -> Message {
         switch state {
         case .notInstalled:
@@ -604,8 +663,10 @@ public enum Surfaces {
         case .pluginOutdated:
             Message(title: "Update this plugin", detail: "Shotbolt is newer than this plugin", action: nil, actionTitle: nil)
         case .disabled:
-            Message(title: "Other apps can't control Shotbolt", detail: "Turn this on in Shotbolt Settings, under Advanced",
-                    action: .openSettings, actionTitle: "Open Settings")
+            // The switch's name, not its pane: it was under Advanced up to 1.2.5 and is under Workflows from 1.3, and Settings'
+            // search finds it by this name in every version with the feed.
+            Message(title: "Other apps can't control Shotbolt", detail: disabledDetail, action: .openSettings,
+                    actionTitle: "Open Settings")
         case .ready:
             Message(title: "No captures yet", detail: "", action: nil, actionTitle: nil)
         }
@@ -613,7 +674,8 @@ public enum Surfaces {
 
     static func notice(_ message: Message, prefix: String) -> [JSON] {
         var column: [JSON] = [
-            ["type": "image", "source": "appIcon", "size": 36, "id": "\(prefix)notice-icon", "padding": ["bottom": 4]],
+            // Rounded so it reads as an app icon, not a square tile. Only the lake layout, which allows `cornerRadius`, shows this.
+            ["type": "image", "source": "appIcon", "size": 36, "cornerRadius": 8, "id": "\(prefix)notice-icon", "padding": ["bottom": 4]],
             text(message.title, weight: "semibold", id: "\(prefix)notice-title"),
             text(message.detail, style: "compact", tint: "gray", weight: "regular", id: "\(prefix)notice-detail"),
         ]

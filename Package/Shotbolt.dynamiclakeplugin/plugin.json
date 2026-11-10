@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "identifier": "nl.breukr.shotbolt.dynamiclake",
   "name": "Shotbolt",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "developerName": "Breukr",
   "description": "Shotbolt in the notch. The time, Pause and Stop while you record. Open the lake for your newest screenshots and recordings: copy them or their text, annotate, pin, or drag them into any app, and start any capture from there.",
   "executable": "shotbolt-lake",

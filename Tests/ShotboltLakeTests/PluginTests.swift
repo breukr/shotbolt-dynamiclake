@@ -156,6 +156,68 @@ final class PlannerTests: XCTestCase {
         XCTAssertEqual(types(planner.tick(now: now.addingTimeInterval(22 + ActivityPlanner.savedDuration))), ["dismiss recording"])
     }
 
+    func clockText(_ command: JSON?) -> String? {
+        (((command?["surfaces"] as? JSON)?["compactLiveActivity"] as? JSON)?["rightSlot"] as? JSON)?["text"] as? String
+    }
+
+    func clockTint(_ command: JSON?) -> String? {
+        (((command?["surfaces"] as? JSON)?["compactLiveActivity"] as? JSON)?["rightSlot"] as? JSON)?["tint"] as? String
+    }
+
+    func testTheCompactClockTicksOncePerSecondAndStopsWhenPaused() {
+        var planner = ActivityPlanner()
+        let created = planner.update(status(.init(state: .recording, kind: .video, elapsed: 41.6)), settings: PluginSettings(),
+                                     features: features, now: now, assetID: { _ in nil })
+        XCTAssertEqual(clockText(created.first), "0:41\u{2800}\u{2800}", "short numeric text, ended by two blanks that keep it off the edge")
+        XCTAssertEqual(clockTint(created.first), "red", "red while the take records")
+        XCTAssertEqual(planner.nextDeadline, now.addingTimeInterval(0.4))
+        XCTAssertEqual(types(planner.tick(now: now.addingTimeInterval(0.3))), [], "not its second yet")
+        let next = planner.tick(now: now.addingTimeInterval(0.4))
+        XCTAssertEqual(types(next), ["update recording"])
+        XCTAssertEqual(clockText(next.first), "0:42\u{2800}\u{2800}")
+        XCTAssertEqual(clockTint(next.first), "red")
+        XCTAssertEqual(((next.first?["surfaces"] as? JSON)?["compactLiveActivity"] as? JSON)?.keys.sorted(), ["leftSlot", "rightSlot"],
+                       "the dot goes along, or DynamicLake drops it")
+        XCTAssertEqual(planner.nextDeadline, now.addingTimeInterval(1.4))
+
+        // A newer feed of the same take resends nothing unless the second moved on.
+        XCTAssertEqual(types(planner.update(status(.init(state: .recording, kind: .video, elapsed: 42.1), at: now.addingTimeInterval(0.5)),
+                                            settings: PluginSettings(), features: features, now: now.addingTimeInterval(0.5),
+                                            assetID: { _ in nil })), [])
+        XCTAssertEqual(types(planner.tick(now: now.addingTimeInterval(0.5))), [])
+
+        let paused = planner.update(status(.init(state: .paused, kind: .video, elapsed: 43.2), at: now.addingTimeInterval(1.6)),
+                                    settings: PluginSettings(), features: features, now: now.addingTimeInterval(1.6), assetID: { _ in nil })
+        XCTAssertEqual(clockText(paused.first), "0:43\u{2800}\u{2800}")
+        XCTAssertEqual(clockTint(paused.first), "white", "a frozen time is not a running take")
+        XCTAssertNil(planner.nextDeadline, "a paused clock does not tick")
+    }
+
+    func testTheCountdownCountsDownInTheSameClock() {
+        var planner = ActivityPlanner()
+        let created = planner.update(status(.init(state: .starting, kind: .video, elapsed: 0, countdownEndsAt: now.addingTimeInterval(3))),
+                                     settings: PluginSettings(), features: features, now: now, assetID: { _ in nil })
+        XCTAssertEqual(clockText(created.first), "0:03\u{2800}\u{2800}")
+        XCTAssertEqual(clockTint(created.first), "white", "the countdown is not a running take")
+        let second = planner.tick(now: now.addingTimeInterval(1))
+        XCTAssertEqual(clockText(second.first), "0:02\u{2800}\u{2800}")
+        XCTAssertEqual(clockTint(second.first), "white")
+        XCTAssertEqual(((second.first?["surfaces"] as? JSON)?["compactLiveActivity"] as? JSON)?.keys.sorted(), ["leftSlot", "rightSlot"],
+                       "the countdown's update keeps both slots too")
+        XCTAssertEqual(clockText(planner.tick(now: now.addingTimeInterval(2)).first), "0:01\u{2800}\u{2800}")
+        XCTAssertEqual(types(planner.tick(now: now.addingTimeInterval(2.5))), [])
+    }
+
+    func testAHostWithoutNumericTextKeepsItsOwnTimer() {
+        var planner = ActivityPlanner()
+        let plain = HostFeatures(numericText: false)
+        let created = planner.update(status(.init(state: .recording, kind: .video, elapsed: 5)), settings: PluginSettings(),
+                                     features: plain, now: now, assetID: { _ in nil })
+        let slot = ((created.first?["surfaces"] as? JSON)?["compactLiveActivity"] as? JSON)?["rightSlot"] as? JSON
+        XCTAssertEqual(slot?["type"] as? String, "timer")
+        XCTAssertNil(planner.nextDeadline)
+    }
+
     func testADiscardedTakeLeavesAtOnce() {
         var planner = ActivityPlanner()
         _ = planner.update(status(.init(state: .recording, kind: .gif, elapsed: 2)), settings: PluginSettings(), features: features, now: now,
@@ -228,7 +290,8 @@ final class PluginLoopTests: XCTestCase {
         func send(_ command: String) { sent.append(command) }
         func launchShotbolt() { launched += 1 }
         func openWebsite() {}
-        func fileReady(_ path: String) -> Bool { true }
+        var ready: (String) -> Bool = { _ in true }
+        func fileReady(_ path: String) -> Bool { ready(path) }
         var subscribed = 0
         func subscribe() { subscribed += 1 }
     }
@@ -265,6 +328,61 @@ final class PluginLoopTests: XCTestCase {
         XCTAssertTrue(String(describing: output).contains("checkmark"))
         try plugin.tick(now: now.addingTimeInterval(Plugin.closeAfterCopy))
         XCTAssertEqual(output.last?["type"] as? String, "closeLake")
+    }
+
+    /// Shotbolt 1.3 may ask "edited or original?" before it copies a video, so the lake shows no check for one; it still
+    /// sends Copy and closes, so Shotbolt's question is in view.
+    func testCopyingAVideoInTheLakeSendsItAndClosesTheLakeWithoutACheck() throws {
+        let video = ShotboltStatus.Capture(id: id, kind: .video, createdAt: now, file: "/tmp/a.mov", width: 10, height: 10, duration: 5)
+        link.state = .ready(ShotboltStatus(app: .init(version: "1.3.0", build: "18", pid: 1), captures: [video], updatedAt: now))
+        try plugin.tick(now: now)
+        try plugin.handle(["type": "lakeOpened", "trigger": "click"], now: now)
+        output.removeAll()
+        try plugin.handle(["type": "action", "actionID": "copy:\(id.uuidString)", "surface": "lake"], now: now)
+        XCTAssertEqual(link.sent, ["copy-capture?id=\(id.uuidString)"])
+        try plugin.tick(now: now.addingTimeInterval(0.1))
+        XCTAssertEqual(output.count, 0, "no copied state, so no lake patch")
+        XCTAssertEqual(plugin.nextWake(now: now.addingTimeInterval(0.1)), now.addingTimeInterval(Plugin.closeAfterCopy),
+                       "the lake close is still due")
+        try plugin.tick(now: now.addingTimeInterval(Plugin.closeAfterCopy))
+        XCTAssertEqual(output.map { $0["type"] as? String }, ["closeLake"])
+        XCTAssertFalse(String(describing: output).contains("checkmark"))
+    }
+
+    /// A take saved a moment ago cannot have been edited yet: its sneak peek still says Copied.
+    func testCopyingTheSavedTakeFromItsSneakPeekStillSaysCopied() throws {
+        let app = ShotboltStatus.App(version: "1.3.0", build: "18", pid: 1)
+        link.state = .ready(ShotboltStatus(app: app, recording: .init(state: .recording, kind: .video, elapsed: 3), updatedAt: now))
+        try plugin.tick(now: now)
+        link.state = .ready(ShotboltStatus(app: app, recording: .init(state: .saving, kind: .video, elapsed: 4), updatedAt: now))
+        plugin.markStatusChanged()
+        try plugin.tick(now: now.addingTimeInterval(1))
+        let video = ShotboltStatus.Capture(id: id, kind: .video, createdAt: now.addingTimeInterval(2), file: "/tmp/a.mov", width: 10, height: 10)
+        link.state = .ready(ShotboltStatus(app: app, captures: [video], updatedAt: now.addingTimeInterval(2)))
+        plugin.markStatusChanged()
+        try plugin.tick(now: now.addingTimeInterval(2))
+        XCTAssertTrue(output.contains { $0["presentSneakPeek"] as? Int == 3 }, "the saved take shows")
+        output.removeAll()
+        try plugin.handle(["type": "action", "activityID": "recording", "actionID": "copy:\(id.uuidString)", "surface": "sneakPeek"],
+                          now: now.addingTimeInterval(3))
+        XCTAssertEqual(link.sent, ["copy-capture?id=\(id.uuidString)"])
+        XCTAssertEqual(output.first?["activityID"] as? String, "recording")
+        XCTAssertTrue(String(describing: output.first ?? [:]).contains("Copied"))
+    }
+
+    /// A thumbnail not written yet: the open lake looks again soon, so the picture shows once Shotbolt writes it.
+    func testAnOpenLakeLooksAgainWhileAThumbnailIsMissing() throws {
+        let capture = ShotboltStatus.Capture(id: id, kind: .screenshot, createdAt: now, file: "/tmp/a.png", thumbnail: "/tmp/not-yet.png",
+                                             width: 10, height: 10)
+        link.state = .ready(ShotboltStatus(app: .init(version: "1.3.0", build: "18", pid: 1), captures: [capture], updatedAt: now))
+        link.ready = { $0 != "/tmp/not-yet.png" }
+        try plugin.handle(["type": "lakeOpened", "trigger": "click"], now: now)
+        try plugin.tick(now: now)
+        XCTAssertEqual(plugin.nextWake(now: now), now.addingTimeInterval(Plugin.lakeRefreshInterval))
+        link.ready = { _ in true }
+        try plugin.tick(now: now.addingTimeInterval(Plugin.lakeRefreshInterval))
+        XCTAssertEqual(plugin.nextWake(now: now.addingTimeInterval(Plugin.lakeRefreshInterval)), now.addingTimeInterval(60),
+                       "once it is there, only the next time change")
     }
 
     func testSleepsUntilThePollWhenNothingIsDue() throws {

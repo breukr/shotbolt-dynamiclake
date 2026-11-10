@@ -2,3 +2,10 @@
 build/
 .swiftpm/
 .DS_Store
+# Signing and notarization material never belongs in this repository.
+*.p8
+*.p12
+*.cer
+*.provisionprofile
+.env
+.env.*

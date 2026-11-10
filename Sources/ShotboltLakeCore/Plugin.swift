@@ -187,8 +187,15 @@ public final class Plugin {
             return
         case .copy(let id):
             run(action)
-            copied = (id, now.addingTimeInterval(Self.copiedFeedback))
-            lakeNeedsSend = true
+            // From Shotbolt 1.3, Copy on a video edited in its video editor first asks "Share edited or original?" in a toast,
+            // and the feed does not say which videos were edited. So a video gets no check in the lake or DynaGlance: it could
+            // claim a copy that has not happened yet. The lake still closes, so Shotbolt's own toast shows. Older Shotbolts copy
+            // a video at once, so there the missing check only costs a little feedback.
+            if state?.status?.captures.first(where: { $0.id == id })?.kind != .video {
+                copied = (id, now.addingTimeInterval(Self.copiedFeedback))
+                lakeNeedsSend = true
+            }
+            // The saved take's sneak peek keeps its "Copied": that take was saved seconds ago, too soon to have been edited.
             try send(planner.copied(id, features: features))
             if lakeVisible, features.lakeLayout { closeLakeAt = now.addingTimeInterval(Self.closeAfterCopy) }
             return
@@ -248,7 +255,8 @@ public final class Plugin {
     /// becomes "1 min ago".
     private func scheduleLakeRefresh(_ state: ShotboltState, now: Date) {
         let captures = Array(state.status?.captures.prefix(Surfaces.maxLakeRows) ?? [])
-        let writing = captures.contains { !link.fileReady($0.file) }
+        // A file or a thumbnail still being written: look again soon, so the picture shows once it is there.
+        let writing = captures.contains { !link.fileReady($0.file) || $0.thumbnail.map { !link.fileReady($0) } == true }
         nextLakeRefresh = writing ? now.addingTimeInterval(Self.lakeRefreshInterval) : Surfaces.nextTimeChange(captures.map(\.createdAt), now: now)
     }
 }

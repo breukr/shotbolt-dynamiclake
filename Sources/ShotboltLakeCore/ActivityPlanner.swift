@@ -14,7 +14,8 @@ public struct ActivityPlanner {
     /// How long "Saving recording" waits for the file to reach History after the take ended.
     public static let saveWait: TimeInterval = 10
 
-    /// What makes the recording activity change: anything else (the running clock) DynamicLake animates by itself.
+    /// What makes the recording activity change: anything else is the running clock, which `tick` advances (or, without numeric
+    /// text, DynamicLake's timer runs by itself).
     struct RecordingKey: Equatable {
         var state: ShotboltStatus.Recording.State
         var kind: ShotboltStatus.Recording.Kind
@@ -36,6 +37,10 @@ public struct ActivityPlanner {
     private var awaitingSaveUntil: Date?
     private var captureShown = false
     private var captureUntil: Date?
+    /// The take whose compact clock `tick` advances (`Surfaces.compactClock`), the text the notch shows and when it changes.
+    private var clockStatus: ShotboltStatus?
+    private var clockText: String?
+    private var clockAt: Date?
 
     public init() {}
 
@@ -49,16 +54,25 @@ public struct ActivityPlanner {
         known = (known ?? []).union(status.captures.map(\.id))
 
         if let recording = status.recording, settings.showRecordings, recording.state != .other {
-            let start = Int(status.recordingStart()?.timeIntervalSince1970.rounded() ?? 0)
+            let start = Surfaces.wholeSeconds(status.recordingStart()?.timeIntervalSince1970 ?? 0, .toNearestOrAwayFromZero)
             let key = RecordingKey(state: recording.state, kind: recording.kind,
-                                   start: recording.state == .paused ? Int(recording.elapsed) : start,
-                                   countdownEnd: recording.countdownEndsAt.map { Int($0.timeIntervalSince1970.rounded()) })
+                                   start: recording.state == .paused ? Surfaces.wholeSeconds(recording.elapsed) : start,
+                                   countdownEnd: recording.countdownEndsAt.map {
+                                       Surfaces.wholeSeconds($0.timeIntervalSince1970, .toNearestOrAwayFromZero)
+                                   })
             if recordingKey == nil { takeStartedAt = status.recordingStart() ?? now }
+            let clock = features.numericText ? Surfaces.compactClock(status, now: now) : nil
             if key != recordingKey || savedUntil != nil,
                let command = Surfaces.recordingActivity(status, now: now, create: !recordingShown, features: features) {
                 out.append(command)
                 recordingShown = true
+                clockText = clock?.slot["text"] as? String
+                clockAt = clock?.next
+            } else if clock != nil {
+                // The same take in a newer feed: `tick` checks the clock against what the notch shows.
+                clockAt = now
             }
+            clockStatus = clock == nil ? nil : status
             recordingKey = key
             savedUntil = nil
             awaitingSaveUntil = nil
@@ -70,6 +84,7 @@ public struct ActivityPlanner {
             // The take ended: saved, still on its way to History, or discarded. Shotbolt says which (`lastTake`); an older
             // Shotbolt does not, and then a new video or GIF is the saved take and "saving" means a file is coming.
             recordingKey = nil
+            stopClock()
             let take = status.lastTake.flatMap { take in
                 take.endedAt >= (takeStartedAt ?? .distantPast).addingTimeInterval(-1) && now.timeIntervalSince(take.endedAt) < Self.savedWindow ? take : nil
             }
@@ -113,15 +128,31 @@ public struct ActivityPlanner {
         return [Surfaces.copiedUpdate(capture, features: features)]
     }
 
-    /// When `tick` next ends something, if anything shows.
-    public var nextDeadline: Date? { [savedUntil ?? awaitingSaveUntil, captureUntil].compactMap { $0 }.min() }
+    /// When `tick` next changes something, if anything shows: the clock's next second, or an activity to end.
+    public var nextDeadline: Date? { [savedUntil ?? awaitingSaveUntil, captureUntil, clockAt].compactMap { $0 }.min() }
 
-    /// Ends what has been on screen long enough.
+    /// Advances the compact clock and ends what has been on screen long enough.
     public mutating func tick(now: Date) -> [JSON] {
         var out: [JSON] = []
+        if let status = clockStatus, let recording = status.recording, let at = clockAt, now >= at {
+            if let clock = Surfaces.compactClock(status, now: now) {
+                let text = clock.slot["text"] as? String
+                if text != clockText { out.append(Surfaces.clockUpdate(clock.slot, recording: recording)); clockText = text }
+                // A wake a moment early finds the same second: it waits for the next one rather than spinning.
+                clockAt = clock.next.map { max($0, now.addingTimeInterval(0.05)) }
+            } else {
+                stopClock()
+            }
+        }
         if let until = savedUntil ?? awaitingSaveUntil, now >= until { out.append(dismissRecording()) }
         if let until = captureUntil, now >= until { out.append(dismissCapture()) }
         return out
+    }
+
+    private mutating func stopClock() {
+        clockStatus = nil
+        clockText = nil
+        clockAt = nil
     }
 
     private mutating func dismissAll() -> [JSON] {
@@ -135,6 +166,7 @@ public struct ActivityPlanner {
 
     private mutating func dismissRecording() -> JSON {
         recordingShown = false
+        stopClock()
         savedUntil = nil
         savedCapture = nil
         takeStartedAt = nil

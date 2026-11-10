@@ -44,14 +44,27 @@ final class MacLink: ShotboltLink {
                                      status: readStatus(), now: now)
     }
 
-    /// Read again only when the file changed.
+    /// Shotbolt's feed is a few KB; a bigger file is not one it wrote and is not read at all.
+    static let maxFeedSize = 1024 * 1024
+
+    /// Read again only when the file changed, so a refused file is logged once.
     private func readStatus() -> ShotboltStatus? {
         let path = target.statusFile.path
         guard let modified = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date else { return nil }
         if let cachedStatus, cachedStatus.modified == modified { return cachedStatus.status }
         var status: ShotboltStatus?
         do {
-            status = try ShotboltStatus.decode(Data(contentsOf: target.statusFile))
+            // Never more than the cap plus one byte in memory, whatever the file's size says by the time it is read.
+            let handle = try FileHandle(forReadingFrom: target.statusFile)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: Self.maxFeedSize + 1) ?? Data()
+            if data.count > Self.maxFeedSize {
+                log("ignored \(path): over \(Self.maxFeedSize / 1024) KB")
+            } else {
+                // Thumbnails only from the folder that holds the feed: `Shotbolt/Integrations/status.json` → `Shotbolt`.
+                let support = target.statusFile.deletingLastPathComponent().deletingLastPathComponent()
+                status = try ShotboltStatus.decode(data).keepingThumbnails(inside: support)
+            }
         } catch {
             log("could not read \(path): \(error)")
         }
