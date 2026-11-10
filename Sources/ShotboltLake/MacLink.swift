@@ -86,6 +86,45 @@ final class MacLink: ShotboltLink {
 
     func subscribe() { notify_post(target.subscribeNotification) }
 
+    /// DynamicLake, which starts this plugin: its windows are the island. Lab builds can point `--check` at another process.
+    var hostPID: pid_t = getppid()
+
+    /// See `IslandPlacement`: the decision is there, this only gathers what it needs. No permission is needed: the window list
+    /// gives other apps' window frames without Screen Recording (only window names need it, and none are read).
+    /// At most once a second: a tick can come several times a second (DynamicLake's messages, copy feedback), and one
+    /// detection costs about 1 to 2 ms on an idle Mac but 10 to 30 ms on a busy one, mostly in the window server.
+    func compactStyle() -> CompactStyle {
+        let now = Date()
+        if let cached = cachedStyle, now.timeIntervalSince(cached.at) < 1 { return cached.style }
+        let style = compactStyleDecision().style
+        cachedStyle = (now, style)
+        return style
+    }
+    private var cachedStyle: (at: Date, style: CompactStyle)?
+
+    func compactStyleDecision() -> IslandPlacement.Decision {
+        var count: UInt32 = 0
+        var ids: [CGDirectDisplayID] = []
+        if CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 {
+            ids = Array(repeating: 0, count: Int(count))
+            if CGGetActiveDisplayList(count, &ids, &count) != .success { ids = [] }
+            ids = Array(ids.prefix(Int(count)))
+        }
+        // The screen list of a process without an app object can lag a display change: a display it does not list yet
+        // counts as one without a notch, which can only turn the answer into text.
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        let notched = Set(NSScreen.screens.filter { $0.safeAreaInsets.top > 0 }
+            .compactMap { ($0.deviceDescription[key] as? NSNumber)?.uint32Value })
+        let displays = ids.map { IslandPlacement.Display(id: $0, bounds: CGDisplayBounds($0), hasNotch: notched.contains($0)) }
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let windows = list.compactMap { window -> CGRect? in
+            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == hostPID,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary else { return nil }
+            return CGRect(dictionaryRepresentation: bounds as CFDictionary)
+        }
+        return IslandPlacement.decide(primary: CGMainDisplayID(), displays: displays, hostWindows: windows)
+    }
+
     /// The copy to launch: in an Applications folder before anywhere else, never one in the Trash, on a mounted disk image or
     /// translocated, and the newest build among equals.
     func installedCopy() -> URL? {

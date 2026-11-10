@@ -1,5 +1,24 @@
 import Foundation
 
+/// How the compact live activity draws its marks, decided by where the island is (`IslandPlacement`, asked through
+/// `ShotboltLink.compactStyle`).
+///
+/// DynamicLake lays the compact activity out by the primary display, the one with the menu bar: with a notch there and the
+/// island on it, the dot and the clock sit well inside the island; with no notch there, it uses the layout for a display
+/// without a notch even when the island is drawn on the MacBook's notch, and there an image touches the rounded edge and is
+/// cut. On a display without a notch it draws only text in the compact slots, whichever display is primary. Text is drawn
+/// and placed right in every case, so `.text` draws the marks as characters. Measured live in DynamicLake Playground 1.2 (14)
+/// on 2026-11-10 (see `TextMarks`).
+public enum CompactStyle: String, Equatable, Sendable {
+    /// SF Symbols, DynamicLake's status marks, the saved take's picture, and a clock without blanks.
+    case symbols
+    /// Text only: each mark a character after two blanks, the clock with blanks after it, no picture or progress ring.
+    case text
+
+    /// What a host gets: the text style needs numeric text, so a host without it keeps the symbols (and its own timer).
+    func effective(_ features: HostFeatures) -> CompactStyle { features.numericText ? self : .symbols }
+}
+
 /// The JSON DynamicLake renders, built from Shotbolt's state. Pure functions: tests and `--demo-json` call them with any state.
 ///
 /// Look: SF Symbols and DynamicLake's own components, quiet gray chrome, red only for a take that records (the menu bar's
@@ -174,18 +193,57 @@ public enum Surfaces {
         return timer
     }
 
-    /// What ends the compact clock's text: braille blanks (U+2800), which draw nothing but take room, since the slot takes no
-    /// padding and trims spaces. One is about 8 pt wide. On a notch the text otherwise sits flush against the activity's edge,
-    /// and two put it about as far in as the dot on the other side. On a display without a notch DynamicLake Playground 1.2
-    /// aligns text about 6 pt past the pill's edge, so two leave about 8 pt there, and "1:02:05" still fits.
-    static let clockEnd = String(repeating: "\u{2800}", count: 2)
+    /// The text style's marks and spacing. The slots take no padding and trim spaces, so braille blanks (U+2800) make the room:
+    /// they draw nothing, and one is about 8 pt wide. Measured in DynamicLake Playground 1.2 (14) on 2026-11-10, with a MacBook
+    /// (notch) and two external displays:
+    /// - Notch display primary: the layout is right without help. The symbol dot is about 15 pt from the left edge and a clock
+    ///   without blanks about 13 pt from the right; two blanks would put it at about 29 pt. So `.symbols` sends no blanks.
+    /// - Island on the notch display, an external display primary: images sit about 2 pt from the outer edge and the rounded
+    ///   corner cuts the dot; text without blanks is flush with the edge; each wing is only about 44 pt wide. With two blanks
+    ///   the text dot is about 13 pt from the left edge and the clock about 14 pt from the right.
+    /// - Island on a display without a notch: only text is drawn, about 6 pt past the pill's edge. With two blanks both sit
+    ///   about 8 pt inside the pill, and the pill shows a red dot at last.
+    enum TextMarks {
+        /// Before every mark.
+        static let lead = String(repeating: "\u{2800}", count: 2)
+        /// U+2B24, red: the take records.
+        static let recording = "\u{2B24}"
+        /// Two U+2759, gray: reads as a small pause mark.
+        static let paused = "\u{2759}\u{2759}"
+        /// U+25EF, red: a thin ring for the countdown.
+        static let starting = "\u{25EF}"
+        /// U+22EF, gray: saving or making the GIF.
+        static let saving = "\u{22EF}"
+        /// U+2713, green: saved.
+        static let saved = "\u{2713}"
+        /// After the clock. An hour-long clock ("1:02:05") is about 40 pt wide, and with two blanks it reaches about 9 pt under
+        /// the physical notch in the notch-display-not-primary case, so a clock longer than `shortClock` characters gets one.
+        /// The price, seen live: in the pill such a clock touches the pill's right edge (whole, not cut). The plugin cannot
+        /// tell those two cases apart, and a first digit hidden behind the notch would read as a wrong time.
+        static let clockBlanks = 2, longClockBlanks = 1, shortClock = 5
+    }
+
+    /// A text-style mark: two blanks, then the character.
+    static func textMark(_ glyph: String, tint: String) -> JSON { text(TextMarks.lead + glyph, style: "numeric", tint: tint) }
+
+    /// The compact activity's left slot for a take, in `style`.
+    static func compactMark(_ recording: ShotboltStatus.Recording, style: CompactStyle) -> JSON {
+        guard style == .text else { return takeMark(recording, size: nil, id: nil) }
+        switch recording.state {
+        case .recording: return textMark(TextMarks.recording, tint: "red")
+        case .paused: return textMark(TextMarks.paused, tint: "gray")
+        case .starting: return textMark(TextMarks.starting, tint: "red")
+        case .saving, .converting, .other: return textMark(TextMarks.saving, tint: "gray")
+        }
+    }
 
     /// The compact activity's clock while a take runs: "0:42" as numeric text, and when it next changes (`ActivityPlanner.tick`
-    /// sends that second). DynamicLake's timer reads 00:00:42, so the plugin draws its own, ended by `clockEnd`.
-    /// Red while the take records: on a display without a notch the dot is not drawn, so the colour is what says "recording"
-    /// there. Paused and during the countdown it stays white, so a frozen or counting-down time does not look like a running
-    /// take. Nil when there is nothing to count.
-    static func compactClock(_ status: ShotboltStatus, now: Date) -> (slot: JSON, next: Date?)? {
+    /// sends that second). DynamicLake's timer reads 00:00:42, so the plugin draws its own. In `.text` blanks follow it (see
+    /// `TextMarks`); in `.symbols` none, as DynamicLake already places it well inside the island there.
+    /// Red while the take records: where the dot is not drawn the colour is what says "recording". Paused and during the
+    /// countdown it stays white, so a frozen or counting-down time does not look like a running take. Nil when there is
+    /// nothing to count.
+    static func compactClock(_ status: ShotboltStatus, now: Date, style: CompactStyle = .symbols) -> (slot: JSON, next: Date?)? {
         guard let recording = status.recording else { return nil }
         let shown: Int
         let next: Date?
@@ -205,13 +263,15 @@ public enum Surfaces {
             return nil
         }
         let tint = recording.state == .recording ? "red" : "white"
-        return (text(duration(Double(shown)) + clockEnd, style: "numeric", tint: tint, id: "clock"), next)
+        let digits = duration(Double(shown))
+        let blanks = style == .text ? (digits.count > TextMarks.shortClock ? TextMarks.longClockBlanks : TextMarks.clockBlanks) : 0
+        return (text(digits + String(repeating: "\u{2800}", count: blanks), style: "numeric", tint: tint, id: "clock"), next)
     }
 
-    /// The compact clock's next second. The left slot goes along: DynamicLake drops a slot an update leaves out.
-    public static func clockUpdate(_ slot: JSON, recording: ShotboltStatus.Recording) -> JSON {
+    /// The compact clock's next second. The left slot goes along in the same style: DynamicLake drops a slot an update leaves out.
+    public static func clockUpdate(_ slot: JSON, recording: ShotboltStatus.Recording, style: CompactStyle = .symbols) -> JSON {
         ["schemaVersion": pluginSchemaVersion, "type": "update", "activityID": recordingActivityID,
-         "surfaces": ["compactLiveActivity": ["leftSlot": takeMark(recording, size: nil, id: nil), "rightSlot": slot]]]
+         "surfaces": ["compactLiveActivity": ["leftSlot": compactMark(recording, style: style), "rightSlot": slot]]]
     }
 
     /// The countdown before a take, while there is one.
@@ -256,13 +316,16 @@ public enum Surfaces {
 
     // MARK: Live activities
 
-    /// The live activity of a take, from the countdown to "saving". Nil for a state this version does not know.
-    public static func recordingActivity(_ status: ShotboltStatus, now: Date, create: Bool, features: HostFeatures) -> JSON? {
+    /// The live activity of a take, from the countdown to "saving". Nil for a state this version does not know. `style` only
+    /// changes the compact activity; the sneak peek and the side capsule are the same in both.
+    public static func recordingActivity(_ status: ShotboltStatus, now: Date, create: Bool, features: HostFeatures,
+                                         style: CompactStyle = .symbols) -> JSON? {
         guard let recording = status.recording else { return nil }
         let gif = recording.kind == .gif
+        let style = style.effective(features)
         // Without numeric text the host gets its own timer, cramped as it is.
-        let clock = features.numericText ? compactClock(status, now: now)?.slot : nil
-        let compact: JSON
+        let clock = features.numericText ? compactClock(status, now: now, style: style)?.slot : nil
+        var compact: JSON
         let peek: JSON
         switch recording.state {
         case .starting:
@@ -291,9 +354,15 @@ public enum Surfaces {
         case .other:
             return nil
         }
+        // The side capsule, when another live activity has the notch: just the dot, as a symbol in either style.
+        let extra: JSON = ["leftSlot": compact["leftSlot"] as Any]
+        if style == .text {
+            // Text only: the mark, and the clock when there is one (no timer, picture or progress ring: they are not drawn).
+            compact = ["leftSlot": compactMark(recording, style: .text)]
+            if let clock { compact["rightSlot"] = clock }
+        }
         var surfaces: JSON = ["compactLiveActivity": compact, "sneakPeek": peek]
-        // The side capsule, when another live activity has the notch: just the dot.
-        surfaces["extraLiveActivity"] = ["leftSlot": compact["leftSlot"] as Any]
+        surfaces["extraLiveActivity"] = extra
         // Large: DynamicLake's timer reads 00:00:00, which a normal compact slot cuts off.
         return activityCommand(create: create, id: recordingActivityID, title: "Shotbolt", priority: "normal", size: "large",
                                surfaces: surfaces, presentSneakPeek: nil, features: features)
@@ -308,13 +377,18 @@ public enum Surfaces {
         }
     }
 
-    /// A take was saved: the same activity turns green for a moment, with its length and Copy.
-    public static func savedActivity(_ capture: ShotboltStatus.Capture, assetID: String?, create: Bool, features: HostFeatures) -> JSON {
+    /// A take was saved: the same activity turns green for a moment, with its length and Copy. In `.text` the compact activity
+    /// is the check alone (the picture is not drawn there).
+    public static func savedActivity(_ capture: ShotboltStatus.Capture, assetID: String?, create: Bool, features: HostFeatures,
+                                     style: CompactStyle = .symbols) -> JSON {
         // No clickable picture here: a host that does not know image actions would reject the whole update.
         let picture = thumbnail(capture, assetID: assetID, size: nil, id: "saved-thumb")
         let label = [capture.kind == .gif ? "GIF saved" : "Video saved"] + (capture.duration.map { [duration($0)] } ?? [])
+        let compact: JSON = style.effective(features) == .text
+            ? ["leftSlot": textMark(TextMarks.saved, tint: "green")]
+            : ["leftSlot": ["type": "status", "status": "success", "tint": "green"], "rightSlot": picture]
         let surfaces: JSON = [
-            "compactLiveActivity": ["leftSlot": ["type": "status", "status": "success", "tint": "green"], "rightSlot": picture],
+            "compactLiveActivity": compact,
             // The check under the compact's check, as DynamicLake's sneak peek rules ask; Edit Video is in the lake.
             "sneakPeek": ["leftSlot": ["type": "status", "status": "success", "tint": "green", "id": "saved-mark"],
                           "center": text(label.joined(separator: " · "), style: "compact", id: "saved-label"),

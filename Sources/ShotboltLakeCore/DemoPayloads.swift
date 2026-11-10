@@ -45,7 +45,16 @@ public enum DemoPayloads {
             if let command = Surfaces.recordingActivity(status, now: now, create: index == 0, features: features) { out.append(command) }
             out.append(Surfaces.lakeCommand(Surfaces.lake(.ready(status), context: context, features: features)))
         }
+        // The same takes in the text style (a primary display without a notch), and its clock's next second.
+        for recording in recordings {
+            let status = sampleStatus(now: now, recording: recording)
+            if let command = Surfaces.recordingActivity(status, now: now, create: false, features: features, style: .text) { out.append(command) }
+            if let clock = Surfaces.compactClock(status, now: now, style: .text) {
+                out.append(Surfaces.clockUpdate(clock.slot, recording: recording, style: .text))
+            }
+        }
         let status = sampleStatus(now: now)
+        out.append(Surfaces.savedActivity(status.captures[1], assetID: "thumb-1", create: false, features: features, style: .text))
         out.append(Surfaces.savedActivity(status.captures[1], assetID: "thumb-1", create: false, features: features))
         out.append(Surfaces.savedActivity(status.captures[3], assetID: nil, create: false, features: features))
         out.append(Surfaces.copiedUpdate(status.captures[1], features: features))

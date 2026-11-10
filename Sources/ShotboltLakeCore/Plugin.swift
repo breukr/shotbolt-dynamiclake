@@ -12,6 +12,13 @@ public protocol ShotboltLink: AnyObject {
     func fileReady(_ path: String) -> Bool
     /// Asks Shotbolt for its feed: it writes it only while a companion asked in the last few minutes.
     func subscribe()
+    /// How the compact activity should be drawn now, from the displays and where the island is (`IslandPlacement`). Asked
+    /// every tick.
+    func compactStyle() -> CompactStyle
+}
+
+extension ShotboltLink {
+    public func compactStyle() -> CompactStyle { .symbols }
 }
 
 /// The plugin's loop, without the socket: `handle` takes what DynamicLake sends, `tick` does what is due, and every command
@@ -60,6 +67,7 @@ public final class Plugin {
     private var moreOpen = false
     private var closeLakeAt: Date?
     private var delayed: [(at: Date, action: PluginAction)] = []
+    private var style: CompactStyle = .symbols
 
     public init(link: ShotboltLink, features: HostFeatures, loadSettings: @escaping () -> PluginSettings,
                 thumbnails: ThumbnailAssets = ThumbnailAssets(), log: @escaping (String) -> Void = { _ in },
@@ -121,6 +129,10 @@ public final class Plugin {
         let latestSettings = loadSettings()
         var replan = false
         if latestSettings != settings { settings = latestSettings; replan = true }
+        // The primary display and the island's display can change at any time (a lid closed, a display set as main, the
+        // host's target display): the activity follows at once.
+        let latestStyle = link.compactStyle()
+        if latestStyle != style { style = latestStyle; replan = true }
 
         if now >= lastSubscribe.addingTimeInterval(Self.subscribeInterval) { subscribe(now) }
         if statusDirty || now >= nextPoll {
@@ -136,7 +148,9 @@ public final class Plugin {
                 retries = 0
             }
         }
-        if replan, let state { try send(planner.update(state, settings: settings, features: features, now: now, assetID: assetID)) }
+        if replan, let state {
+            try send(planner.update(state, settings: settings, features: features, now: now, style: style, assetID: assetID))
+        }
         try send(planner.tick(now: now))
 
         for (index, item) in delayed.enumerated().reversed() where now >= item.at {

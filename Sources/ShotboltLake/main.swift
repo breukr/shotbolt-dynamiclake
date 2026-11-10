@@ -44,6 +44,8 @@ if arguments.contains("--demo-json") {
 if arguments.contains("--check") {
     print("Shotbolt: \(target.bundleID)")
     print("feed: \(target.statusFile.path)")
+    let decision = link.compactStyleDecision()
+    print("compact style: \(decision.style.rawValue) (\(decision.reason))")
     // Shotbolt writes the feed only for a companion that asks, so ask as the plugin does and give it a moment: without this a
     // Shotbolt with the feed reads as one without it whenever the plugin itself is not running.
     link.subscribe()

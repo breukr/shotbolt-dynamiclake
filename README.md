@@ -8,8 +8,8 @@ to it, and it does nothing without Shotbolt installed.
 
 ## What it does
 
-- **While Shotbolt records**: a red dot and the time recorded in red; paused, DynamicLake's paused mark and the time frozen in
-  white. Hover for the sneak peek with Pause/Resume and Stop (Cancel during a countdown). Saving and GIF conversion show as
+- **While Shotbolt records**: a red dot and the time recorded in red; paused, a gray pause mark and the time frozen in white.
+  Hover for the sneak peek with Pause/Resume and Stop (Cancel during a countdown). Saving and GIF conversion show as
   progress. When the take is saved the activity turns green for a few seconds ("Video saved · 1:05") with Copy.
 - **The lake**:
   - Area, Window, Fullscreen and Record along the top, with More (Text, Scrolling, GIF and Self-Timer in the same row) and
@@ -34,8 +34,10 @@ says so with the one button that fixes it.
 - The direct download of Shotbolt from shotbolt.app (or Homebrew). Shotbolt Lite from the App Store does not write the status feed,
   so the plugin does nothing with it.
 
-On a display without a notch, DynamicLake Playground 1.2 draws only text in the compact live activity, so the red dot does not
-show there. The time in red is what marks a recording on such a display.
+DynamicLake Playground 1.2 lays out the compact live activity by the primary display (the one with the menu bar). Where that
+display has no notch it uses a different layout, which cuts icons at the edge of a MacBook's notch, and on any display without
+a notch it draws only text. So the plugin uses symbols only when DynamicLake's island is on a primary display that has a
+notch, and draws the dot and the other marks as text characters everywhere else, which works on any Mac and any display.
 
 ## How it works
 
@@ -48,6 +50,9 @@ The plugin needs no permissions and makes no network requests. Everything stays 
   the recording in progress and how the last one ended. `Tests/Fixtures/status-v1.json` is a sample. The plugin treats the
   file as untrusted: it ignores one over 1 MB, reads at most 50 captures, drops out-of-range numbers and dates, and reads
   thumbnails only from inside Shotbolt's own folder.
+- **Displays**: to pick between those two styles the plugin reads the display arrangement (which displays there are, where,
+  which is primary and whether it has a notch) and the sizes and positions of DynamicLake's own on-screen windows, never their
+  contents or names. macOS gives these without any permission.
 - **Running**: event-driven. It wakes for a message from DynamicLake, Shotbolt's notification, Shotbolt quitting, a change to
   its settings, and its own next deadline (for example a time like "5 min ago" that changes). While a take records it
   updates the time in the notch once a second. A safety check runs every 60 s.

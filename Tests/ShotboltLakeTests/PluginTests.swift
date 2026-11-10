@@ -168,13 +168,13 @@ final class PlannerTests: XCTestCase {
         var planner = ActivityPlanner()
         let created = planner.update(status(.init(state: .recording, kind: .video, elapsed: 41.6)), settings: PluginSettings(),
                                      features: features, now: now, assetID: { _ in nil })
-        XCTAssertEqual(clockText(created.first), "0:41\u{2800}\u{2800}", "short numeric text, ended by two blanks that keep it off the edge")
+        XCTAssertEqual(clockText(created.first), "0:41", "short numeric text; the symbols style needs no blanks")
         XCTAssertEqual(clockTint(created.first), "red", "red while the take records")
         XCTAssertEqual(planner.nextDeadline, now.addingTimeInterval(0.4))
         XCTAssertEqual(types(planner.tick(now: now.addingTimeInterval(0.3))), [], "not its second yet")
         let next = planner.tick(now: now.addingTimeInterval(0.4))
         XCTAssertEqual(types(next), ["update recording"])
-        XCTAssertEqual(clockText(next.first), "0:42\u{2800}\u{2800}")
+        XCTAssertEqual(clockText(next.first), "0:42")
         XCTAssertEqual(clockTint(next.first), "red")
         XCTAssertEqual(((next.first?["surfaces"] as? JSON)?["compactLiveActivity"] as? JSON)?.keys.sorted(), ["leftSlot", "rightSlot"],
                        "the dot goes along, or DynamicLake drops it")
@@ -188,7 +188,7 @@ final class PlannerTests: XCTestCase {
 
         let paused = planner.update(status(.init(state: .paused, kind: .video, elapsed: 43.2), at: now.addingTimeInterval(1.6)),
                                     settings: PluginSettings(), features: features, now: now.addingTimeInterval(1.6), assetID: { _ in nil })
-        XCTAssertEqual(clockText(paused.first), "0:43\u{2800}\u{2800}")
+        XCTAssertEqual(clockText(paused.first), "0:43")
         XCTAssertEqual(clockTint(paused.first), "white", "a frozen time is not a running take")
         XCTAssertNil(planner.nextDeadline, "a paused clock does not tick")
     }
@@ -197,14 +197,14 @@ final class PlannerTests: XCTestCase {
         var planner = ActivityPlanner()
         let created = planner.update(status(.init(state: .starting, kind: .video, elapsed: 0, countdownEndsAt: now.addingTimeInterval(3))),
                                      settings: PluginSettings(), features: features, now: now, assetID: { _ in nil })
-        XCTAssertEqual(clockText(created.first), "0:03\u{2800}\u{2800}")
+        XCTAssertEqual(clockText(created.first), "0:03")
         XCTAssertEqual(clockTint(created.first), "white", "the countdown is not a running take")
         let second = planner.tick(now: now.addingTimeInterval(1))
-        XCTAssertEqual(clockText(second.first), "0:02\u{2800}\u{2800}")
+        XCTAssertEqual(clockText(second.first), "0:02")
         XCTAssertEqual(clockTint(second.first), "white")
         XCTAssertEqual(((second.first?["surfaces"] as? JSON)?["compactLiveActivity"] as? JSON)?.keys.sorted(), ["leftSlot", "rightSlot"],
                        "the countdown's update keeps both slots too")
-        XCTAssertEqual(clockText(planner.tick(now: now.addingTimeInterval(2)).first), "0:01\u{2800}\u{2800}")
+        XCTAssertEqual(clockText(planner.tick(now: now.addingTimeInterval(2)).first), "0:01")
         XCTAssertEqual(types(planner.tick(now: now.addingTimeInterval(2.5))), [])
     }
 

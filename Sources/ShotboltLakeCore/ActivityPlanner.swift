@@ -22,6 +22,8 @@ public struct ActivityPlanner {
         /// Whole seconds, so a feed rewritten a moment later with the same take does not resend it.
         var start: Int
         var countdownEnd: Int?
+        /// A lid opened or closed mid-take changes how the compact activity is drawn: the activity goes again, as an update.
+        var style: CompactStyle = .symbols
     }
 
     private var known: Set<UUID>?
@@ -41,13 +43,18 @@ public struct ActivityPlanner {
     private var clockStatus: ShotboltStatus?
     private var clockText: String?
     private var clockAt: Date?
+    /// The style the clock ticks in, and the one the saved take's activity was sent in.
+    private var clockStyle: CompactStyle = .symbols
+    private var savedStyle: CompactStyle = .symbols
 
     public init() {}
 
-    /// The commands for a new state. `assetID` registers a capture's thumbnail when one is needed.
+    /// The commands for a new state. `assetID` registers a capture's thumbnail when one is needed; `style` is how the compact
+    /// activity is drawn now (a host without numeric text always gets `.symbols`).
     public mutating func update(_ state: ShotboltState, settings: PluginSettings, features: HostFeatures, now: Date,
-                                assetID: (ShotboltStatus.Capture) -> String?) -> [JSON] {
+                                style: CompactStyle = .symbols, assetID: (ShotboltStatus.Capture) -> String?) -> [JSON] {
         guard let status = state.status else { return dismissAll() }
+        let style = style.effective(features)
         var out: [JSON] = []
         let fresh = status.captures.filter { known?.contains($0.id) == false }
         let firstLook = known == nil
@@ -59,11 +66,12 @@ public struct ActivityPlanner {
                                    start: recording.state == .paused ? Surfaces.wholeSeconds(recording.elapsed) : start,
                                    countdownEnd: recording.countdownEndsAt.map {
                                        Surfaces.wholeSeconds($0.timeIntervalSince1970, .toNearestOrAwayFromZero)
-                                   })
+                                   }, style: style)
             if recordingKey == nil { takeStartedAt = status.recordingStart() ?? now }
-            let clock = features.numericText ? Surfaces.compactClock(status, now: now) : nil
+            let clock = features.numericText ? Surfaces.compactClock(status, now: now, style: style) : nil
+            clockStyle = style
             if key != recordingKey || savedUntil != nil,
-               let command = Surfaces.recordingActivity(status, now: now, create: !recordingShown, features: features) {
+               let command = Surfaces.recordingActivity(status, now: now, create: !recordingShown, features: features, style: style) {
                 out.append(command)
                 recordingShown = true
                 clockText = clock?.slot["text"] as? String
@@ -98,9 +106,10 @@ public struct ActivityPlanner {
                 fileComing = ended.state == .saving || ended.state == .converting
             }
             if let saved, settings.showRecordings, recordingShown {
-                out.append(Surfaces.savedActivity(saved, assetID: assetID(saved), create: false, features: features))
+                out.append(Surfaces.savedActivity(saved, assetID: assetID(saved), create: false, features: features, style: style))
                 savedUntil = now.addingTimeInterval(Self.savedDuration)
                 savedCapture = saved
+                savedStyle = style
                 awaitingSaveUntil = nil
                 return out
             }
@@ -111,6 +120,10 @@ public struct ActivityPlanner {
             if recordingShown { out.append(dismissRecording()) }
         } else if !settings.showRecordings, recordingShown {
             out.append(dismissRecording())
+        } else if let saved = savedCapture, savedUntil != nil, style != savedStyle {
+            // The style changed while "saved" shows: the same moment, drawn the new way.
+            out.append(Surfaces.savedActivity(saved, assetID: assetID(saved), create: false, features: features, style: style))
+            savedStyle = style
         }
 
         if !firstLook, settings.showNewCaptures, savedUntil == nil, let newest = fresh.first(where: { $0.kind != .other }),
@@ -135,9 +148,9 @@ public struct ActivityPlanner {
     public mutating func tick(now: Date) -> [JSON] {
         var out: [JSON] = []
         if let status = clockStatus, let recording = status.recording, let at = clockAt, now >= at {
-            if let clock = Surfaces.compactClock(status, now: now) {
+            if let clock = Surfaces.compactClock(status, now: now, style: clockStyle) {
                 let text = clock.slot["text"] as? String
-                if text != clockText { out.append(Surfaces.clockUpdate(clock.slot, recording: recording)); clockText = text }
+                if text != clockText { out.append(Surfaces.clockUpdate(clock.slot, recording: recording, style: clockStyle)); clockText = text }
                 // A wake a moment early finds the same second: it waits for the next one rather than spinning.
                 clockAt = clock.next.map { max($0, now.addingTimeInterval(0.05)) }
             } else {
